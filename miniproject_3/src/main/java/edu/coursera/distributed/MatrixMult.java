@@ -52,14 +52,65 @@ public class MatrixMult {
      */
     public static void parallelMatrixMultiply(Matrix a, Matrix b, Matrix c,
             final MPI mpi) throws MPIException {
-        for (int i = 0; i < c.getNRows(); i++) {
-            for (int j = 0; j < c.getNCols(); j++) {
+        int myRank = mpi.MPI_Comm_rank(mpi.MPI_COMM_WORLD);
+        int totalRanks = mpi.MPI_Comm_size(mpi.MPI_COMM_WORLD);
+        mpi.MPI_Bcast(b.getValues(), 0, b.getValues().length, 0, mpi.MPI_COMM_WORLD);
+        //mpi.MPI_Bcast(a.getValues(), 0, a.getValues().length, 0, mpi.MPI_COMM_WORLD);
+
+        int myRows = calculateMyRows(a.getNRows(), myRank, totalRanks);
+        int myFirstRow = 0;
+        MPI.MPI_Request[] sendRequests = new MPI.MPI_Request[totalRanks - 1];
+        if (myRank == 0) {
+            for (int i = 0; i < totalRanks - 1; ++i) {
+                sendRequests[i] = mpi.MPI_Isend(a.getValues(),
+                        (myRows + a.getNRows() / totalRanks * i) * a.getNCols(),
+                        a.getNRows() / totalRanks * a.getNCols(),
+                        i + 1,
+                        0,
+                        mpi.MPI_COMM_WORLD);
+            }
+        } else {
+            myFirstRow = (calculateMyRows(a.getNRows(), 0, totalRanks) + a.getNRows() / totalRanks * (myRank - 1));
+            mpi.MPI_Recv(a.getValues(), myFirstRow * a.getNCols(), a.getNRows() / totalRanks * a.getNCols(), 0, -0, mpi.MPI_COMM_WORLD);
+        }
+
+        if (myRank == 0) {
+            mpi.MPI_Waitall(sendRequests);
+        }
+
+        for (int i = myFirstRow; i < myFirstRow + myRows; ++i) {
+            for (int j = 0; j < c.getNCols(); ++j) {
                 c.set(i, j, 0.0);
 
                 for (int k = 0; k < b.getNRows(); k++) {
                     c.incr(i, j, a.get(i, k) * b.get(k, j));
                 }
             }
+        }
+
+        if (myRank == 0) {
+            MPI.MPI_Request[] recvReq = new MPI.MPI_Request[totalRanks - 1];
+            for (int i = 0; i < recvReq.length; ++i) {
+                recvReq[i] = mpi.MPI_Irecv(c.getValues(),
+                        (myRows + c.getNRows() / totalRanks * i) * c.getNCols(),
+                        c.getNRows() / totalRanks * c.getNCols(),
+                        i + 1,
+                        0,
+                        mpi.MPI_COMM_WORLD);
+            }
+            mpi.MPI_Waitall(recvReq);
+        } else {
+            mpi.MPI_Send(c.getValues(), myFirstRow * c.getNCols(), c.getNRows() / totalRanks * c.getNCols(), 0, -0, mpi.MPI_COMM_WORLD );
+        }
+    }
+
+    private static int calculateMyRows(int total, int myRank, int worldSize) {
+        int avg = total / worldSize;
+
+        if (myRank == 0) {
+            return avg + total % worldSize;
+        } else {
+            return avg;
         }
     }
 }
